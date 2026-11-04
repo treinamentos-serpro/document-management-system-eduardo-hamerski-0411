@@ -13,11 +13,13 @@
 const express = require('express');
 const multer = require('multer');
 const documentRoutes = require('./routes/documentRoutes');
+const sessionIdentity = require('./middleware/sessionIdentity');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(sessionIdentity);
 
 // Endpoint de verificação de saúde. As demais rotas (/upload, /documents,
 // /documents/:id/download) serão implementadas durante o Passo 2.
@@ -40,6 +42,15 @@ app.use((error, req, res, next) => {
 
     return res.status(statusCode).json({
       error: { code: error.code, message },
+    });
+  }
+
+  if (error.code === 'STORAGE_QUOTA_EXCEEDED') {
+    return res.status(507).json({
+      error: {
+        code: error.code,
+        message: 'O armazenamento local está cheio. Tente novamente mais tarde.',
+      },
     });
   }
 

@@ -3,8 +3,14 @@ const path = require('node:path');
 const { storageDirectory } = require('../config/storage');
 
 function getPath(storageName) {
+  if (typeof storageName !== 'string' || path.basename(storageName) !== storageName) {
+    throw new Error('Nome interno de arquivo inválido.');
+  }
+
   const filePath = path.resolve(storageDirectory, storageName);
-  if (!filePath.startsWith(`${storageDirectory}${path.sep}`)) {
+  const relativePath = path.relative(storageDirectory, filePath);
+  if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativePath)) {
     throw new Error('Nome interno de arquivo inválido.');
   }
 
@@ -34,4 +40,34 @@ async function exists(storageName) {
   }
 }
 
-module.exports = { exists, getPath, remove };
+async function getStorageUsage() {
+  let entries;
+  try {
+    entries = await fs.readdir(storageDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return 0;
+    }
+
+    throw error;
+  }
+
+  const fileSizes = await Promise.all(entries
+    .filter((entry) => entry.isFile())
+    .map(async (entry) => {
+      try {
+        const file = await fs.lstat(path.join(storageDirectory, entry.name));
+        return file.isFile() && !file.isSymbolicLink() ? file.size : 0;
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          return 0;
+        }
+
+        throw error;
+      }
+    }));
+
+  return fileSizes.reduce((total, size) => total + size, 0);
+}
+
+module.exports = { exists, getPath, getStorageUsage, remove };

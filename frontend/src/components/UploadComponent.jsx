@@ -1,14 +1,38 @@
-import { useRef, useState } from 'react';
-import { uploadDocument } from '../services/documentApi.js';
+import { useEffect, useRef, useState } from 'react';
+import { getUploadConfig, uploadDocument } from '../services/documentApi.js';
 
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+function formatFileSize(bytes) {
+  if (bytes >= 1024 * 1024) {
+    const megabytes = bytes / (1024 * 1024);
+    return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`;
+  }
+
+  return `${Math.ceil(bytes / 1024)} KB`;
+}
 
 export default function UploadComponent({ onUploaded }) {
   const [file, setFile] = useState(null);
+  const [maxFileSizeBytes, setMaxFileSizeBytes] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const inputRef = useRef(null);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    getUploadConfig()
+      .then(({ maxFileSizeBytes: configuredLimit }) => {
+        if (isCurrent && Number.isSafeInteger(configuredLimit) && configuredLimit > 0) {
+          setMaxFileSizeBytes(configuredLimit);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   function selectFile(event) {
     setFile(event.target.files?.[0] || null);
@@ -23,8 +47,8 @@ export default function UploadComponent({ onUploaded }) {
       return;
     }
 
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      setError('O arquivo deve ter no máximo 10 MB.');
+    if (maxFileSizeBytes && file.size > maxFileSizeBytes) {
+      setError(`O arquivo deve ter no máximo ${formatFileSize(maxFileSizeBytes)}.`);
       return;
     }
 
@@ -54,7 +78,11 @@ export default function UploadComponent({ onUploaded }) {
           <p className="eyebrow">01 / ADICIONAR</p>
           <h2 id="upload-title">Enviar documento</h2>
         </div>
-        <p className="section-hint">Tamanho máximo: 10 MB</p>
+        <p className="section-hint">
+          {maxFileSizeBytes
+            ? `Tamanho máximo: ${formatFileSize(maxFileSizeBytes)}`
+            : 'O limite de tamanho é validado pelo servidor'}
+        </p>
       </div>
 
       <form className="upload-form" onSubmit={submitUpload}>

@@ -25,7 +25,7 @@ Oferecer a usuários identificados uma aplicação web para enviar documentos, c
 
 ### Premissas e identidade do usuário
 
-As operações usam um identificador estável de usuário obtido de um contexto confiável do servidor, como `req.user.id`. O cliente não pode escolher o proprietário enviando um campo `owner`. O mecanismo de autenticação não está definido nesta especificação e deverá ser provido ou acordado antes do uso em produção.
+Nesta fase, o backend cria um identificador aleatório de sessão e o envia em cookie `HttpOnly`, `SameSite=Strict`, assinado pelo servidor. O cliente não escolhe o proprietário por `x-user-id`, corpo ou parâmetro. A sessão distingue navegadores, mas não autentica uma pessoa nem oferece login; uma futura autenticação poderá fornecer `req.user.id` confiável.
 
 ## 3. Requisitos funcionais
 
@@ -41,6 +41,7 @@ As operações usam um identificador estável de usuário obtido de um contexto 
 | RF-08 | O sistema responde com `404` quando o documento não existe ou não pertence ao usuário da requisição. |
 | RF-09 | Os nomes originais são preservados nos metadados e usados com segurança no nome de download; eles não determinam o caminho interno do arquivo. |
 | RF-10 | O usuário recebe mensagens de erro consistentes para requisições inválidas, arquivos grandes demais e falhas internas. |
+| RF-11 | O frontend consulta o limite de arquivo configurado pelo backend antes de validar o envio localmente. |
 
 ## 4. Requisitos não funcionais
 
@@ -56,6 +57,8 @@ As operações usam um identificador estável de usuário obtido de um contexto 
 | RNF-08 | As datas são serializadas em ISO 8601, em UTC. |
 | RNF-09 | A aplicação informa falhas de leitura e gravação do filesystem sem derrubar o processo. |
 | RNF-10 | O layout e as ações principais da interface devem funcionar em telas desktop e mobile. |
+| RNF-11 | O armazenamento local tem limite total configurável; uploads que ultrapassarem esse limite são removidos e respondem com `507`. |
+| RNF-12 | Downloads são enviados como `application/octet-stream` com `X-Content-Type-Options: nosniff`; o MIME recebido do cliente não controla a interpretação da resposta. |
 
 ### Configuração
 
@@ -64,6 +67,8 @@ As operações usam um identificador estável de usuário obtido de um contexto 
 | `PORT` | `3000` | Porta HTTP do backend. |
 | `STORAGE_DIR` | `storage` | Diretório local de arquivos; o caminho deve ser resolvido de forma consistente independentemente do diretório de execução. |
 | `MAX_FILE_SIZE_BYTES` | `10485760` | Tamanho máximo de upload em bytes. |
+| `MAX_STORAGE_BYTES` | `1073741824` | Limite total do diretório de armazenamento em bytes. |
+| `SESSION_SECRET` | Aleatório em desenvolvimento; obrigatório em produção | Segredo de assinatura do cookie, com pelo menos 32 bytes. |
 
 Os arquivos permanecem no disco após reinicialização, mas os metadados em memória não. Portanto, documentos enviados antes de uma reinicialização deixam de aparecer na listagem e não podem ser localizados pela API nesta fase.
 
@@ -88,10 +93,14 @@ O repositório pode manter `storageName`, nome interno gerado pelo servidor, par
 
 ### Convenções
 
-- As rotas do backend são `/upload`, `/documents` e `/documents/:id/download`.
+- As rotas do backend são `/upload/config`, `/upload`, `/documents` e `/documents/:id/download`.
 - No desenvolvimento, o frontend usa o prefixo `/api`; o proxy do Vite remove esse prefixo antes de encaminhar ao backend.
 - Respostas de erro usam o formato `{ "error": { "code": "...", "message": "..." } }`.
-- O proprietário é derivado do contexto confiável do servidor, nunca do corpo ou de parâmetros fornecidos pelo cliente.
+- O proprietário é derivado do cookie assinado pelo servidor, nunca de cabeçalhos, corpo ou parâmetros controlados pelo cliente.
+
+### `GET /upload/config`
+
+**Sucesso:** `200 OK`, corpo `{ "maxFileSizeBytes": 10485760 }`, refletindo `MAX_FILE_SIZE_BYTES` no servidor.
 
 ### `POST /upload`
 
@@ -116,6 +125,7 @@ Envia um arquivo.
 
 - `400 Bad Request`: arquivo ausente, vazio ou requisição multipart inválida.
 - `413 Payload Too Large`: arquivo excede `MAX_FILE_SIZE_BYTES`.
+- `507 Insufficient Storage`: o upload excederia `MAX_STORAGE_BYTES`.
 - `500 Internal Server Error`: falha ao gravar arquivo ou registrar metadados.
 
 ### `GET /documents`
@@ -130,7 +140,7 @@ Lista os documentos do usuário autenticado.
 
 Baixa o conteúdo binário de um documento do usuário.
 
-**Sucesso:** `200 OK`, corpo binário com `Content-Type` apropriado quando conhecido e `Content-Disposition: attachment` usando o nome original com tratamento seguro.
+**Sucesso:** `200 OK`, corpo binário com `Content-Type: application/octet-stream`, `X-Content-Type-Options: nosniff` e `Content-Disposition: attachment` usando o nome original com tratamento seguro.
 
 **Erros esperados:**
 
@@ -140,6 +150,7 @@ Baixa o conteúdo binário de um documento do usuário.
 ## 7. Decisões arquiteturais
 
 - Backend em CommonJS com Express e fluxo `routes -> controllers -> services -> repositories`.
+- Middleware de identidade cria sessões anônimas com UUID em cookie assinado; `SESSION_SECRET` precisa ser estável e forte em produção. Isso não substitui autenticação de usuários.
 - Rotas declaram endpoints e conectam middleware de upload com controllers.
 - Controllers tratam entrada e saída HTTP, validação básica e conversão de erros em respostas.
 - Services aplicam regras de negócio, escopo por proprietário e coordenação entre metadados e arquivo.
@@ -154,7 +165,7 @@ Baixa o conteúdo binário de um documento do usuário.
 As etapas abaixo descrevem trabalho futuro. Nesta solicitação, a implementação dos arquivos de backend e frontend não faz parte do plano executado.
 
 1. **Fechar contratos e decisões pendentes**
-   - Alinhar a origem do identificador confiável do usuário e o tratamento de erros.
+   - Definir se e quando será adicionada autenticação de pessoas além da sessão anônima atual.
    - Artefatos: especificação `docs/specs/dms-spec.md`.
    - Aceite: contratos, limites, dados e premissas revisados; dependência de identidade documentada.
 
@@ -180,7 +191,7 @@ As etapas abaixo descrevem trabalho futuro. Nesta solicitação, a implementaç�
 
 ## 9. Riscos e pontos a decidir
 
-- A identidade do usuário ainda não tem mecanismo definido; não se deve expor a API multiusuário sem contexto confiável.
+- A sessão atual separa navegadores, mas não representa identidade autenticada; login e associação entre dispositivos seguem fora do MVP.
 - Metadados voláteis tornam documentos inacessíveis pela API após reinício, embora os arquivos continuem no disco.
 - Arquivos abandonados por encerramento abrupto entre gravação e registro podem permanecer em `storage`; uma política de limpeza fica fora do MVP.
-- O limite inicial de 10 MiB e a aceitação de qualquer tipo de arquivo devem ser confirmados conforme o uso esperado.
+- O limite total é aplicado após a gravação, então uploads simultâneos podem excedê-lo transitoriamente; confirmar valores de limite e política de limpeza conforme o uso esperado.

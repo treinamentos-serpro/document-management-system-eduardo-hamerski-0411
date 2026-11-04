@@ -1,7 +1,7 @@
 const documentService = require('../services/documentService');
 
 function getOwner(req) {
-  return String(req.user?.id || req.get('x-user-id') || 'default-user');
+  return String(req.user.id);
 }
 
 async function upload(req, res) {
@@ -23,6 +23,10 @@ function list(req, res) {
   return res.json(documentService.listDocuments(getOwner(req)));
 }
 
+function uploadConfig(req, res) {
+  return res.json(documentService.getUploadConfig());
+}
+
 async function download(req, res) {
   const file = await documentService.getDownload(req.params.id, getOwner(req));
   if (!file) {
@@ -31,7 +35,8 @@ async function download(req, res) {
     });
   }
 
-  res.type(file.mimeType || 'application/octet-stream');
+  res.type('application/octet-stream');
+  res.set('X-Content-Type-Options', 'nosniff');
   return res.download(file.filePath, file.originalName, (error) => {
     if (!error) {
       return;
@@ -51,4 +56,4 @@ async function download(req, res) {
   });
 }
 
-module.exports = { download, list, upload };
+module.exports = { download, list, upload, uploadConfig };

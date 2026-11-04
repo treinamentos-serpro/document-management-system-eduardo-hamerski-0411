@@ -1,59 +1,89 @@
 const crypto = require('node:crypto');
-const documentRepository = require('../repositories/documentRepository');
+const { createDocumentRepository } = require('../repositories/documentRepository');
 const localFileRepository = require('../repositories/localFileRepository');
+const { maxFileSizeBytes, maxStorageBytes } = require('../config/storage');
 
 function toPublicDocument(document) {
   const { storageName, ...publicDocument } = document;
   return publicDocument;
 }
 
-async function createDocument(file, owner) {
-  const document = {
-    id: crypto.randomUUID(),
-    originalName: file.originalname,
-    size: file.size,
-    uploadedAt: new Date().toISOString(),
-    owner,
-    mimeType: file.mimetype,
-    storageName: file.filename,
-  };
-
-  try {
-    documentRepository.create(document);
-  } catch (error) {
-    await localFileRepository.remove(file.filename);
-    throw error;
+function createDocumentService({
+  documentRepository,
+  fileRepository,
+  storageLimitBytes = maxStorageBytes,
+}) {
+  function toPublicDocument(document) {
+    const { storageName, ...publicDocument } = document;
+    return publicDocument;
   }
 
-  return toPublicDocument(document);
-}
+  async function createDocument(file, owner) {
+    const document = {
+      id: crypto.randomUUID(),
+      originalName: file.originalname,
+      size: file.size,
+      uploadedAt: new Date().toISOString(),
+      owner,
+      mimeType: file.mimetype,
+      storageName: file.filename,
+    };
 
-function listDocuments(owner) {
-  return documentRepository
-    .findByOwner(owner)
-    .sort((first, second) => second.uploadedAt.localeCompare(first.uploadedAt))
-    .map(toPublicDocument);
-}
+    try {
+      const currentStorageUsage = await fileRepository.getStorageUsage();
+      if (currentStorageUsage > storageLimitBytes) {
+        const error = new Error('O armazenamento local atingiu o limite configurado.');
+        error.code = 'STORAGE_QUOTA_EXCEEDED';
+        throw error;
+      }
 
-async function getDownload(id, owner) {
-  const document = documentRepository.findById(id);
-  if (!document || document.owner !== owner) {
-    return null;
+      documentRepository.create(document);
+    } catch (error) {
+      await fileRepository.remove(file.filename);
+      throw error;
+    }
+
+    return toPublicDocument(document);
   }
 
-  if (!await localFileRepository.exists(document.storageName)) {
-    return null;
+  function listDocuments(owner) {
+    return documentRepository
+      .findByOwner(owner)
+      .sort((first, second) => second.uploadedAt.localeCompare(first.uploadedAt))
+      .map(toPublicDocument);
   }
 
-  return {
-    filePath: localFileRepository.getPath(document.storageName),
-    originalName: document.originalName,
-    mimeType: document.mimeType,
-  };
+  async function getDownload(id, owner) {
+    const document = documentRepository.findById(id);
+    if (!document || document.owner !== owner) {
+      return null;
+    }
+
+    if (!await fileRepository.exists(document.storageName)) {
+      return null;
+    }
+
+    return {
+      filePath: fileRepository.getPath(document.storageName),
+      originalName: document.originalName,
+    };
+  }
+
+  async function discardUpload(storageName) {
+    await fileRepository.remove(storageName);
+  }
+
+  function getUploadConfig() {
+    return { maxFileSizeBytes };
+  }
+
+  return { createDocument, discardUpload, getDownload, getUploadConfig, listDocuments };
 }
 
-async function discardUpload(storageName) {
-  await localFileRepository.remove(storageName);
-}
+const documentService = createDocumentService({
+  documentRepository: createDocumentRepository(),
+  fileRepository: localFileRepository,
+  storageLimitBytes: maxStorageBytes,
+});
 
-module.exports = { createDocument, discardUpload, getDownload, listDocuments };
+module.exports = { ...documentService, createDocumentService };
