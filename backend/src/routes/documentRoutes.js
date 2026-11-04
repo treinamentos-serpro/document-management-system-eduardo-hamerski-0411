@@ -5,6 +5,7 @@ const uploadMiddleware = require('../middleware/uploadMiddleware');
 const router = express.Router();
 
 router.post('/upload', uploadMiddleware, documentController.upload);
+router.get('/upload/config', documentController.uploadConfig);
 router.get('/documents', documentController.list);
 router.get('/documents/:id/download', documentController.download);
 
